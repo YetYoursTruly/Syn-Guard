@@ -238,9 +238,25 @@ local W = {
     PromptGamePassPurchase = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
     PromptBundlePurchase   = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
     PromptPremiumPurchase  = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    PromptRobuxPurchase    = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    PromptSubscriptionPurchase = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    PromptCancelSubscription   = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    PromptNativePurchase   = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    PromptNativePurchaseWithLocalPlayer = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    PromptThirdPartyPurchase = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    PromptBulkPurchase     = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    PromptCollectiblesPurchase = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    -- these spend Robux WITHOUT showing any prompt at all
+    PerformPurchase        = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    PerformPurchaseV2      = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    PerformBulkPurchase    = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    SignalPromptPurchaseFinished        = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    SignalPromptProductPurchaseFinished = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
+    SignalClientPurchaseSuccess         = { class = "MarketplaceService", cat = "Purchase", fake = NOTHING },
 }
+W.OpenNativeOverlay = { class = "GuiService", cat = "Web", fake = NOTHING }
 
-local bypassTok -- lets an approved call through the hook exactly once
+local bypassTok -- lets an approved call pass through every hook layer (restored when the real call returns)
 
 -- returns false (let it through) or true, packedResults (what the script should get back)
 local function check(self, m, ...)
@@ -251,13 +267,16 @@ local function check(self, m, ...)
 
     local args = table.pack(...)
     if bypassTok and bypassTok.m == m and bypassTok.a == args[1] then
-        bypassTok = nil
-        return false
+        return false -- an approved call on its way through (token is cleared by real())
     end
 
     local function real()
+        local prev = bypassTok
         bypassTok = { m = m, a = args[1] }
-        return self[m](self, table.unpack(args, 1, args.n))
+        local okc, res = pcall(function() return table.pack(self[m](self, table.unpack(args, 1, args.n))) end)
+        bypassTok = prev
+        if not okc then error(res, 0) end
+        return table.unpack(res, 1, res.n)
     end
 
     local target, detail = targetOf(args[1], args[2])
@@ -268,6 +287,23 @@ local function check(self, m, ...)
         return true, table.pack(real()) -- approved: the real response goes back to the script
     end
     return true, table.pack(w.fake(...))
+end
+
+-- Hook the method FUNCTIONS themselves. This catches calls that never touch __namecall/__index:
+-- references a script saved earlier, game.X(game, ...), getrawmetatable tricks, etc.
+-- Must run BEFORE the __index hook below so we read the real functions.
+for m, w in pairs(W) do
+    pcall(function()
+        local inst = w.class == "DataModel" and game or cloneref(game:GetService(w.class))
+        local fn = inst[m]
+        if type(fn) ~= "function" or not hookfunction then return end
+        local o = clonef(fn)
+        hookfunction(fn, newcclosure(function(self, ...)
+            local blocked, res = check(self, m, ...)
+            if blocked then return table.unpack(res, 1, res.n) end
+            return o(self, ...)
+        end))
+    end)
 end
 
 if hookmetamethod then
