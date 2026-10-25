@@ -6,7 +6,7 @@
 
     Repo layout:
         Guard.lua
-        Assets/settings.png        (28x28, shown at 14x14 like your other icons)
+        Assets/settings.png, globe.png, shield-alert.png, x.png   (28x28, shown at 14x14)
 
     Startup cost: only the hooks are installed. The UI, the icon download, the ASCII effect and the
     config file are all created lazily the first time they are needed.
@@ -48,12 +48,12 @@ origHttpGet = origHttpGet and clonef(origHttpGet)
 local cfg = { Web = true, Clipboard = true, Teleport = true, Purchase = true, Socket = true, Files = false }
 
 local CATEGORIES = {
-    { key = "Web",       tag = "WEB",  name = "Web / HTTP requests",            color = Color3.fromRGB(90, 160, 255) },
-    { key = "Clipboard", tag = "CLIP", name = "Clipboard",                      color = Color3.fromRGB(255, 180, 60) },
-    { key = "Teleport",  tag = "TELE", name = "Teleports / queue_on_teleport",  color = Color3.fromRGB(180, 120, 255) },
-    { key = "Purchase",  tag = "BUY",  name = "Purchase prompts",               color = Color3.fromRGB(255, 95, 105) },
-    { key = "Socket",    tag = "WS",   name = "WebSockets",                     color = Color3.fromRGB(70, 210, 170) },
-    { key = "Files",     tag = "FILE", name = "File writes",                    color = Color3.fromRGB(210, 210, 100) },
+    { key = "Web",       tag = "WEB",  name = "Web / HTTP requests" },
+    { key = "Clipboard", tag = "CLIP", name = "Clipboard" },
+    { key = "Teleport",  tag = "TELE", name = "Teleports / queue_on_teleport" },
+    { key = "Purchase",  tag = "BUY",  name = "Purchase prompts" },
+    { key = "Socket",    tag = "WS",   name = "WebSockets" },
+    { key = "Files",     tag = "FILE", name = "File writes" },
 }
 local CAT = {}
 for _, c in ipairs(CATEGORIES) do CAT[c.key] = c end
@@ -304,23 +304,26 @@ end
 local ui
 local showSettings = false
 
+-- icons live in the repo's Assets folder; downloaded once, cached in the workspace
+local ICON_FILES = { "settings.png", "globe.png", "shield-alert.png", "x.png" }
+
 local function buildUI()
-    local Players = cloneref(game:GetService("Players"))
     local RunService = cloneref(game:GetService("RunService"))
     local TweenService = cloneref(game:GetService("TweenService"))
     local TextService = cloneref(game:GetService("TextService"))
     local UserInputService = cloneref(game:GetService("UserInputService"))
     local CoreGui = cloneref(game:GetService("CoreGui"))
 
+    -- monochrome palette
     local T = {
-        bg = Color3.fromRGB(12, 12, 14), panel = Color3.fromRGB(26, 26, 30),
-        button = Color3.fromRGB(38, 38, 44), buttonHi = Color3.fromRGB(62, 62, 70),
-        text = Color3.fromRGB(240, 240, 244), dim = Color3.fromRGB(150, 150, 158),
-        icon = Color3.fromRGB(190, 190, 198), green = Color3.fromRGB(80, 220, 130),
-        red = Color3.fromRGB(255, 85, 95), accent = Color3.fromRGB(90, 160, 255),
+        bg = Color3.fromRGB(8, 8, 8), panel = Color3.fromRGB(20, 20, 20),
+        button = Color3.fromRGB(28, 28, 28), buttonHi = Color3.fromRGB(52, 52, 52),
+        text = Color3.fromRGB(238, 238, 238), dim = Color3.fromRGB(130, 130, 130),
+        icon = Color3.fromRGB(200, 200, 200), white = Color3.fromRGB(238, 238, 238),
+        black = Color3.fromRGB(8, 8, 8),
     }
     local W_, TOP, REQ_H, SET_H = 520, 32, 176, 262
-    local PAD = 70 -- ascii reach beyond the window
+    local PAD = 70 -- how far the ascii reaches past the window edges
 
     local function new(class, props, parent)
         local i = Instance.new(class)
@@ -329,11 +332,13 @@ local function buildUI()
         return i
     end
     local function round(p, r) return new("UICorner", { CornerRadius = UDim.new(0, r or 8) }, p) end
-    local function outline(p, tr, color)
-        return new("UIStroke", { Color = color or Color3.new(1, 1, 1), Transparency = tr, Thickness = 1,
+    local function outline(p, tr)
+        return new("UIStroke", { Color = Color3.new(1, 1, 1), Transparency = tr, Thickness = 1,
             ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, p)
     end
-    local function tw(o, t, props) TweenService:Create(o, TweenInfo.new(t, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), props):Play() end
+    local function tw(o, t, props)
+        TweenService:Create(o, TweenInfo.new(t, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), props):Play()
+    end
     local function text(props, parent)
         props.BackgroundTransparency = 1
         props.Font = props.Font or Enum.Font.GothamMedium
@@ -343,70 +348,107 @@ local function buildUI()
         return new("TextLabel", props, parent)
     end
 
+    ------------------------------------------------------------------
+    -- Icons
+    ------------------------------------------------------------------
+    local iconAssets, iconWaiters = {}, {}
+    local function useIcon(img, file, onLoad)
+        if iconAssets[file] then
+            img.Image = iconAssets[file]; img.Visible = true
+            if onLoad then onLoad() end
+            return
+        end
+        iconWaiters[file] = iconWaiters[file] or {}
+        table.insert(iconWaiters[file], { img = img, cb = onLoad })
+    end
+    task.spawn(function()
+        for _, file in ipairs(ICON_FILES) do
+            pcall(function()
+                if not (isfolder and makefolder and isfile and ORIG.writefile and getcustomasset and origHttpGet) then return end
+                if not isfolder(ASSET_DIR) then makefolder(ASSET_DIR) end
+                local path = ASSET_DIR .. "/" .. file
+                if not isfile(path) then
+                    local data = origHttpGet(game, REPO_RAW .. "Assets/" .. file) -- saved original: never intercepted
+                    if type(data) ~= "string" or #data < 50 or data:sub(2, 4) ~= "PNG" then return end
+                    ORIG.writefile(path, data)
+                end
+                iconAssets[file] = getcustomasset(path)
+                for _, w in ipairs(iconWaiters[file] or {}) do
+                    w.img.Image = iconAssets[file]; w.img.Visible = true
+                    if w.cb then w.cb() end
+                end
+            end)
+        end
+    end)
+    local function iconImg(parent, file, size, pos, onLoad)
+        local img = new("ImageLabel", {
+            Size = UDim2.fromOffset(size, size), Position = pos, BackgroundTransparency = 1,
+            ImageColor3 = T.icon, Visible = false,
+        }, parent)
+        useIcon(img, file, onLoad)
+        return img
+    end
+
+    ------------------------------------------------------------------
+    -- Window (fixed position, top center, not draggable)
+    ------------------------------------------------------------------
     local gui = new("ScreenGui", {
         Name = "Syn-Guard", ResetOnSpawn = false, IgnoreGuiInset = true,
         DisplayOrder = 2147483647, ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
     }, (gethui and gethui()) or CoreGui)
 
-    local homePos = UDim2.new(0.5, -W_ / 2, 0, 12)
+    local shownPos  = UDim2.new(0.5, 0, 0, 12)
+    local hiddenPos = UDim2.new(0.5, 0, 0, -(SET_H + PAD + 40))
     local frame = new("Frame", {
-        Name = "Main", Size = UDim2.fromOffset(W_, REQ_H), Position = homePos - UDim2.fromOffset(0, 400),
-        BackgroundColor3 = T.bg, BackgroundTransparency = 0.1, BorderSizePixel = 0, Visible = false,
-        ClipsDescendants = true, ZIndex = 10,
+        Name = "Main", AnchorPoint = Vector2.new(0.5, 0), Size = UDim2.fromOffset(W_, REQ_H), Position = hiddenPos,
+        BackgroundColor3 = T.bg, BackgroundTransparency = 0.08, BorderSizePixel = 0, Visible = false, ZIndex = 10,
     }, gui)
-    round(frame); outline(frame, 0.55)
+    round(frame); outline(frame, 0.6)
     local okS, shadow = pcall(Instance.new, "UIShadow")
     if okS and shadow then
-        pcall(function() shadow.Color = Color3.new(1, 1, 1); shadow.Transparency = 0.78; shadow.BlurRadius = UDim.new(0, 22) end)
+        pcall(function() shadow.Color = Color3.new(1, 1, 1); shadow.Transparency = 0.82; shadow.BlurRadius = UDim.new(0, 20) end)
         shadow.Parent = frame
     end
 
     ------------------------------------------------------------------
-    -- ASCII backdrop (cheap: 2 text layers, ~20fps, only while visible)
+    -- ASCII backdrop: a CHILD of the window, so it can never drift off it
     ------------------------------------------------------------------
+    local HW, HH = W_ + PAD * 2, SET_H + PAD * 2
     local holder = new("Frame", {
         BackgroundTransparency = 1, ClipsDescendants = true, ZIndex = 1,
-        Size = UDim2.fromOffset(W_ + PAD * 2, SET_H + PAD * 2), Visible = false,
-    }, gui)
+        Position = UDim2.fromOffset(-PAD, -PAD), Size = UDim2.fromOffset(HW, HH),
+    }, frame)
     local FONT = Enum.Font.Code
     local huge = Vector2.new(1e5, 1e5)
     local cw = TextService:GetTextSize(string.rep("M", 200), 13, FONT, huge).X / 200
     local ch = (TextService:GetTextSize(string.rep("M\n", 20) .. "M", 13, FONT, huge).Y - TextService:GetTextSize("M", 13, FONT, huge).Y) / 20
     if cw <= 0 then cw = 8 end
     if ch <= 0 then ch = 13 end
-    local cols = math.floor((W_ + PAD * 2) / cw)
-    local rows = math.floor((SET_H + PAD * 2) / ch)
-    local layerDim, layerBright = {}, {}
-    for i = 1, 2 do
-        layerDim[i] = {}; layerBright[i] = {}
-    end
+    local cols, rows = math.floor(HW / cw), math.floor(HH / ch)
     local labels = {}
     for i = 1, 2 do
         labels[i] = new("TextLabel", {
             BackgroundTransparency = 1, Font = FONT, TextSize = 13, TextColor3 = Color3.new(1, 1, 1),
-            TextTransparency = i == 1 and 0.82 or 0.45, TextXAlignment = Enum.TextXAlignment.Left,
-            TextYAlignment = Enum.TextYAlignment.Top, Text = "", ZIndex = 1,
-            Size = UDim2.fromOffset(cols * cw + 4, rows * ch + 4), RichText = false,
+            TextTransparency = i == 1 and 0.84 or 0.5, TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top, Text = "", ZIndex = 1, RichText = false,
+            Position = UDim2.fromOffset((HW - cols * cw) / 2, (HH - rows * ch) / 2),
+            Size = UDim2.fromOffset(cols * cw + 4, rows * ch + 4),
         }, holder)
     end
     local ramp = " .,:;-=+*x#%@"
     local rampLen = #ramp
+    local offX, offY = (HW - cols * cw) / 2, (HH - rows * ch) / 2
     local clock, acc = 0, 0
-    local rowsDim, rowsBright, cd, cb = {}, {}, {}, {}
+    local rowsA, rowsB, ca, cb = {}, {}, {}, {}
     local noise, sin, sqrt, floor = math.noise, math.sin, math.sqrt, math.floor
 
-    local asciiConn = RunService.Heartbeat:Connect(function(dt)
-        if not frame.Visible then holder.Visible = false return end
+    RunService.Heartbeat:Connect(function(dt)
+        if not frame.Visible then return end
         acc += dt
         if acc < 1 / 20 then return end
         clock += acc; acc = 0
-        holder.Visible = true
-        local ap = frame.AbsolutePosition
-        holder.Position = UDim2.fromOffset(ap.X - PAD, ap.Y - PAD)
         local fs = frame.AbsoluteSize
-        local x0, y0, x1, y1 = PAD, PAD, PAD + fs.X, PAD + fs.Y
-        local offX = ((W_ + PAD * 2) - cols * cw) / 2
-        local offY = ((SET_H + PAD * 2) - rows * ch) / 2
+        local x0, y0, x1, y1 = PAD, PAD, PAD + fs.X, PAD + fs.Y -- the window, in holder space
         for y = 0, rows - 1 do
             local cy = offY + (y + 0.5) * ch
             local qy = math.max(y0 - cy, cy - y1, 0)
@@ -416,142 +458,110 @@ local function buildUI()
                 local qx = math.max(x0 - cx, cx - x1, 0)
                 local a, b = " ", " "
                 if (qx > 0 or qy > 0) and qx < PAD and qy < PAD then
-                    local d = sqrt(qx * qx + qy * qy)
-                    local g = 1 - d / PAD
+                    local g = 1 - sqrt(qx * qx + qy * qy) / PAD
                     if g > 0 then
                         g = g * g * (3 - 2 * g)
                         local v = (0.45 + noise(x * 0.055, ny, clock * 0.12) * 1.3 + sin(x * 0.12 + clock * 1.1) * 0.12) * g
                         if v >= 0.1 then
-                            local gl = ramp:sub(math.clamp(floor(v * rampLen) + 1, 2, rampLen), math.clamp(floor(v * rampLen) + 1, 2, rampLen))
+                            local idx = math.clamp(floor(v * rampLen) + 1, 2, rampLen)
+                            local gl = ramp:sub(idx, idx)
                             if v >= 0.55 then b = gl else a = gl end
                         end
                     end
                 end
-                cd[x + 1], cb[x + 1] = a, b
+                ca[x + 1], cb[x + 1] = a, b
             end
-            rowsDim[y + 1] = table.concat(cd, "", 1, cols)
-            rowsBright[y + 1] = table.concat(cb, "", 1, cols)
+            rowsA[y + 1] = table.concat(ca, "", 1, cols)
+            rowsB[y + 1] = table.concat(cb, "", 1, cols)
         end
-        labels[1].Text = table.concat(rowsDim, "\n", 1, rows)
-        labels[2].Text = table.concat(rowsBright, "\n", 1, rows)
+        labels[1].Text = table.concat(rowsA, "\n", 1, rows)
+        labels[2].Text = table.concat(rowsB, "\n", 1, rows)
     end)
 
+    -- clipping layer for the real content (rounded corners)
+    local clip = new("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ClipsDescendants = true, ZIndex = 2 }, frame)
+    round(clip)
+
     ------------------------------------------------------------------
-    -- Top bar (title, pending count, settings gear)
+    -- Top bar: shield icon + title, pending count, settings gear
     ------------------------------------------------------------------
-    local topbar = new("Frame", {
-        Size = UDim2.new(1, 0, 0, TOP), BackgroundColor3 = T.panel, BackgroundTransparency = 0.25, BorderSizePixel = 0,
-    }, frame)
+    local topbar = new("Frame", { Size = UDim2.new(1, 0, 0, TOP), BackgroundColor3 = T.panel, BackgroundTransparency = 0.2, BorderSizePixel = 0 }, clip)
     new("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 1),
         BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.9, BorderSizePixel = 0 }, topbar)
-    local titleLbl = text({
-        Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -150, 1, 0), Text = "Syn-Guard  //  request",
-        Font = Enum.Font.GothamBold,
-    }, topbar)
+    iconImg(topbar, "shield-alert.png", 16, UDim2.fromOffset(12, 8))
+    local titleLbl = text({ Position = UDim2.fromOffset(36, 0), Size = UDim2.new(1, -170, 1, 0), Text = "Syn-Guard  //  request", Font = Enum.Font.GothamBold }, topbar)
     local countLbl = text({
         AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -40, 0, 0), Size = UDim2.fromOffset(100, TOP),
-        Text = "", TextColor3 = T.dim, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right,
-        Font = Enum.Font.Code,
+        Text = "", TextColor3 = T.dim, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right, Font = Enum.Font.Code,
     }, topbar)
 
     local gear = new("TextButton", {
         AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.fromOffset(22, 22),
-        BackgroundColor3 = T.button, BackgroundTransparency = 0.15, BorderSizePixel = 0, AutoButtonColor = false,
+        BackgroundColor3 = T.button, BackgroundTransparency = 0.1, BorderSizePixel = 0, AutoButtonColor = false,
         Text = "[=]", TextColor3 = T.icon, TextSize = 11, Font = Enum.Font.Code,
     }, topbar)
-    round(gear, 6); outline(gear, 0.9)
-    local gearImg = new("ImageLabel", {
-        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(14, 14),
-        BackgroundTransparency = 1, ImageColor3 = T.icon, Visible = false,
-    }, gear)
+    round(gear, 6); outline(gear, 0.88)
+    local gearImg = iconImg(gear, "settings.png", 14, UDim2.fromOffset(4, 4), function() gear.Text = "" end)
     local function paintGear(hover)
         local on = hover or showSettings
         tw(gear, 0.15, { BackgroundColor3 = on and T.buttonHi or T.button })
-        tw(gearImg, 0.15, { ImageColor3 = on and T.text or T.icon })
-        gear.TextColor3 = on and T.text or T.icon
+        tw(gearImg, 0.15, { ImageColor3 = on and T.white or T.icon })
+        gear.TextColor3 = on and T.white or T.icon
     end
     gear.MouseEnter:Connect(function() paintGear(true) end)
     gear.MouseLeave:Connect(function() paintGear(false) end)
 
-    -- settings icon: downloaded once from the repo's Assets folder, cached in the workspace
-    task.spawn(function()
-        pcall(function()
-            if not (isfolder and makefolder and isfile and ORIG.writefile and getcustomasset and origHttpGet) then return end
-            if not isfolder(ASSET_DIR) then makefolder(ASSET_DIR) end
-            local path = ASSET_DIR .. "/" .. ICON_FILE
-            if not isfile(path) then
-                local data = origHttpGet(game, REPO_RAW .. "Assets/" .. ICON_FILE) -- saved original: not intercepted
-                if type(data) ~= "string" or #data < 50 or data:sub(2, 4) ~= "PNG" then return end
-                ORIG.writefile(path, data)
-            end
-            gearImg.Image = getcustomasset(path)
-            gearImg.Visible = true
-            gear.Text = ""
-        end)
-    end)
-
-    -- drag by the top bar
-    local dragging, dragStart, startPos
-    topbar.InputBegan:Connect(function(input)
-        local t = input.UserInputType
-        if t ~= Enum.UserInputType.MouseButton1 and t ~= Enum.UserInputType.Touch then return end
-        dragging, dragStart, startPos = true, input.Position, frame.Position
-        local c; c = input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false; homePos = frame.Position; c:Disconnect()
-            end
-        end)
-    end)
-    local dragConn = UserInputService.InputChanged:Connect(function(input)
-        if not dragging then return end
-        local t = input.UserInputType
-        if t == Enum.UserInputType.MouseMovement or t == Enum.UserInputType.Touch then
-            local d = input.Position - dragStart
-            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-        end
-    end)
-
     ------------------------------------------------------------------
     -- Request page
     ------------------------------------------------------------------
-    local reqPage = new("Frame", { Position = UDim2.fromOffset(0, TOP), Size = UDim2.new(1, 0, 1, -TOP), BackgroundTransparency = 1 }, frame)
-    local tagLbl = text({ Position = UDim2.fromOffset(14, 10), Size = UDim2.fromOffset(52, 18), Text = "[WEB]", Font = Enum.Font.Code, TextSize = 13 }, reqPage)
-    local fnLbl = text({ Position = UDim2.fromOffset(70, 10), Size = UDim2.new(1, -84, 0, 18), Text = "", Font = Enum.Font.GothamBold, TextTruncate = Enum.TextTruncate.AtEnd }, reqPage)
-    local srcLbl = text({ Position = UDim2.fromOffset(14, 30), Size = UDim2.new(1, -28, 0, 16), Text = "", TextColor3 = T.dim, TextSize = 11, TextTruncate = Enum.TextTruncate.AtEnd }, reqPage)
-    local tbox = new("Frame", { Position = UDim2.fromOffset(14, 54), Size = UDim2.new(1, -28, 0, 44), BackgroundColor3 = T.panel, BackgroundTransparency = 0.25, BorderSizePixel = 0 }, reqPage)
+    local reqPage = new("Frame", { Position = UDim2.fromOffset(0, TOP), Size = UDim2.new(1, 0, 1, -TOP), BackgroundTransparency = 1 }, clip)
+    local globeIcon = iconImg(reqPage, "globe.png", 16, UDim2.fromOffset(14, 10))
+    local shieldIcon = iconImg(reqPage, "shield-alert.png", 16, UDim2.fromOffset(14, 10))
+    local tagLbl = text({ Position = UDim2.fromOffset(38, 10), Size = UDim2.fromOffset(52, 18), Text = "[WEB]", Font = Enum.Font.Code, TextSize = 13, TextColor3 = T.dim }, reqPage)
+    local fnLbl = text({ Position = UDim2.fromOffset(94, 10), Size = UDim2.new(1, -108, 0, 18), Text = "", Font = Enum.Font.GothamBold, TextTruncate = Enum.TextTruncate.AtEnd }, reqPage)
+    local srcLbl = text({ Position = UDim2.fromOffset(14, 31), Size = UDim2.new(1, -28, 0, 16), Text = "", TextColor3 = T.dim, TextSize = 11, TextTruncate = Enum.TextTruncate.AtEnd }, reqPage)
+    local tbox = new("Frame", { Position = UDim2.fromOffset(14, 54), Size = UDim2.new(1, -28, 0, 44), BackgroundColor3 = T.panel, BackgroundTransparency = 0.2, BorderSizePixel = 0 }, reqPage)
     round(tbox, 6); outline(tbox, 0.9)
-    text({ Position = UDim2.fromOffset(9, 0), Size = UDim2.fromOffset(14, 44), Text = "$", TextColor3 = T.green, Font = Enum.Font.Code }, tbox)
+    text({ Position = UDim2.fromOffset(9, 0), Size = UDim2.fromOffset(14, 44), Text = "$", TextColor3 = T.dim, Font = Enum.Font.Code }, tbox)
     local targetLbl = text({
         Position = UDim2.fromOffset(26, 0), Size = UDim2.new(1, -36, 1, 0), Text = "", Font = Enum.Font.Code, TextSize = 12,
         TextWrapped = true, TextTruncate = Enum.TextTruncate.AtEnd,
     }, tbox)
 
-    local function actionBtn(label, color, pos)
-        local b = new("TextButton", {
-            Position = pos, Size = UDim2.new(0.5, -21, 0, 28), BackgroundColor3 = T.button, BackgroundTransparency = 0.15,
-            BorderSizePixel = 0, AutoButtonColor = false, Text = label, TextColor3 = color, TextSize = 13, Font = Enum.Font.GothamBold,
-        }, reqPage)
-        round(b, 6); outline(b, 0.55, color)
-        b.MouseEnter:Connect(function() tw(b, 0.15, { BackgroundColor3 = T.buttonHi }) end)
-        b.MouseLeave:Connect(function() tw(b, 0.2, { BackgroundColor3 = T.button }) end)
-        return b
-    end
-    local allowBtn = actionBtn("Allow", T.green, UDim2.new(0, 14, 0, 108))
-    local declineBtn = actionBtn("Decline", T.red, UDim2.new(0.5, 7, 0, 108))
+    -- Allow: solid light button.  Decline: dark outlined button with the x icon.
+    local allowBtn = new("TextButton", {
+        Position = UDim2.new(0, 14, 0, 108), Size = UDim2.new(0.5, -21, 0, 28), BackgroundColor3 = T.white,
+        BorderSizePixel = 0, AutoButtonColor = false, Text = "Allow", TextColor3 = T.black, TextSize = 13, Font = Enum.Font.GothamBold,
+    }, reqPage)
+    round(allowBtn, 6)
+    allowBtn.MouseEnter:Connect(function() tw(allowBtn, 0.15, { BackgroundColor3 = Color3.new(1, 1, 1) }) end)
+    allowBtn.MouseLeave:Connect(function() tw(allowBtn, 0.2, { BackgroundColor3 = T.white }) end)
+
+    local declineBtn = new("TextButton", {
+        Position = UDim2.new(0.5, 7, 0, 108), Size = UDim2.new(0.5, -21, 0, 28), BackgroundColor3 = T.button, BackgroundTransparency = 0.1,
+        BorderSizePixel = 0, AutoButtonColor = false, Text = "Decline", TextColor3 = T.text, TextSize = 13, Font = Enum.Font.GothamBold,
+    }, reqPage)
+    round(declineBtn, 6); outline(declineBtn, 0.6)
+    iconImg(declineBtn, "x.png", 14, UDim2.new(0, 12, 0.5, -7))
+    declineBtn.MouseEnter:Connect(function() tw(declineBtn, 0.15, { BackgroundColor3 = T.buttonHi }) end)
+    declineBtn.MouseLeave:Connect(function() tw(declineBtn, 0.2, { BackgroundColor3 = T.button }) end)
+
     allowBtn.MouseButton1Click:Connect(function() if queue[1] then resolve(queue[1], true) end end)
     declineBtn.MouseButton1Click:Connect(function() if queue[1] then resolve(queue[1], false) end end)
 
     ------------------------------------------------------------------
     -- Settings page
     ------------------------------------------------------------------
-    local setPage = new("Frame", { Position = UDim2.fromOffset(0, TOP), Size = UDim2.new(1, 0, 1, -TOP), BackgroundTransparency = 1, Visible = false }, frame)
+    local setPage = new("Frame", { Position = UDim2.fromOffset(0, TOP), Size = UDim2.new(1, 0, 1, -TOP), BackgroundTransparency = 1, Visible = false }, clip)
     for i, cat in ipairs(CATEGORIES) do
         local row = new("Frame", { Position = UDim2.fromOffset(14, 8 + (i - 1) * 30), Size = UDim2.new(1, -28, 0, 26), BackgroundTransparency = 1 }, setPage)
-        text({ Size = UDim2.fromOffset(52, 26), Text = "[" .. cat.tag .. "]", Font = Enum.Font.Code, TextColor3 = cat.color }, row)
-        text({ Position = UDim2.fromOffset(58, 0), Size = UDim2.new(1, -140, 1, 0), Text = cat.name, TextSize = 12 }, row)
+        local isWeb = cat.key == "Web" or cat.key == "Socket"
+        iconImg(row, isWeb and "globe.png" or "shield-alert.png", 14, UDim2.fromOffset(0, 6))
+        text({ Position = UDim2.fromOffset(24, 0), Size = UDim2.fromOffset(48, 26), Text = "[" .. cat.tag .. "]", Font = Enum.Font.Code, TextColor3 = T.dim }, row)
+        text({ Position = UDim2.fromOffset(76, 0), Size = UDim2.new(1, -150, 1, 0), Text = cat.name, TextSize = 12 }, row)
         local sw = new("TextButton", {
             AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(64, 22),
-            BackgroundColor3 = T.button, BackgroundTransparency = 0.15, BorderSizePixel = 0, AutoButtonColor = false,
+            BackgroundColor3 = T.button, BackgroundTransparency = 0.1, BorderSizePixel = 0, AutoButtonColor = false,
             Text = "", TextSize = 12, Font = Enum.Font.Code,
         }, row)
         round(sw, 6)
@@ -559,9 +569,8 @@ local function buildUI()
         local function paint()
             local on = cfg[cat.key]
             sw.Text = on and "BLOCK" or "ALLOW"
-            sw.TextColor3 = on and T.green or T.dim
-            st.Color = on and T.green or Color3.new(1, 1, 1)
-            st.Transparency = on and 0.5 or 0.85
+            sw.TextColor3 = on and T.white or T.dim
+            st.Transparency = on and 0.4 or 0.85
         end
         sw.MouseButton1Click:Connect(function() cfg[cat.key] = not cfg[cat.key]; paint(); saveCfg() end)
         paint()
@@ -581,9 +590,9 @@ local function buildUI()
         open = want
         if want then
             frame.Visible = true
-            tw(frame, 0.35, { Position = homePos })
+            tw(frame, 0.35, { Position = shownPos })
         else
-            tw(frame, 0.3, { Position = homePos - UDim2.fromOffset(0, frame.AbsoluteSize.Y + 40) })
+            tw(frame, 0.3, { Position = hiddenPos })
             task.delay(0.32, function() if not open then frame.Visible = false end end)
         end
     end
@@ -593,8 +602,10 @@ local function buildUI()
         local item = queue[1]
         countLbl.Text = #queue > 0 and (#queue .. " pending") or ""
         if item then
-            local c = CAT[item.cat]
-            tagLbl.Text, tagLbl.TextColor3 = "[" .. c.tag .. "]", c.color
+            local isWeb = item.cat == "Web" or item.cat == "Socket"
+            globeIcon.ImageTransparency = isWeb and 0 or 1
+            shieldIcon.ImageTransparency = isWeb and 1 or 0
+            tagLbl.Text = "[" .. CAT[item.cat].tag .. "]"
             fnLbl.Text = item.label .. (item.count > 1 and ("   x" .. item.count) or "")
             srcLbl.Text = "src: " .. item.source .. (item.hold and "   //   script is paused until you choose"
                 or "   //   call blocked, script still running")
